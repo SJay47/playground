@@ -1,0 +1,4 @@
+rna.py
+synthea/output/
+.gitignore
+informed_fingerprint.json

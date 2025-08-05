@@ -1,0 +1,16 @@
+# Python virtual environment
+venv/
+.venv/
+__pycache__/
+
+# Synthea output data (can be very large)
+synthea/output/
+
+# IDE and OS files
+.vscode/
+.idea/
+*.DS_Store
+
+generated_fingerprints/
+
+exported-from-playground/
