@@ -1,0 +1,18 @@
+{
+  "Id": ["Id", "PatientID", "subject_id"],
+  "BIRTHDATE": ["BIRTHDATE", "date_of_birth", "dob"],
+  "DEATHDATE": ["DEATHDATE", "date_of_death", "dod"],
+  "SSN": ["SSN", "social_security_number"],
+  "DRIVERS": ["DRIVERS", "drivers_license"],
+  "PASSPORT": ["PASSPORT", "passport_number"],
+  "FIRST": ["FIRST", "first_name", "given_name"],
+  "LAST": ["LAST", "last_name", "family_name"],
+  "MARITAL": ["MARITAL", "marital_status"],
+  "RACE": ["RACE", "race"],
+  "ETHNICITY": ["ETHNICITY", "ethnicity"],
+  "GENDER": ["GENDER", "sex", "gender_identity"],
+  "BIRTHPLACE": ["BIRTHPLACE", "place_of_birth"],
+  "ADDRESS": ["ADDRESS", "street_address"],
+  "AGE": ["AGE", "age_at_encounter", "current_age"],
+  "DESCRIPTION": ["DESCRIPTION", "condition_description", "diagnosis_text"]
+}
