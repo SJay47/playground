@@ -10,6 +10,8 @@ import re
 import random
 import argparse
 import configparser
+import api_uploader
+from api_uploader import NpEncoder
 
 # --- Configuration ---
 BASE_DIR = Path(__file__).resolve().parent
@@ -20,11 +22,11 @@ CSV_OUTPUT_DIR = SYNTHEA_DIR / "output" / "csv"
 TEMPLATE_PATH = BASE_DIR / "master_fingerprint_template.json"
 OUTPUT_DIR = BASE_DIR / "generated_fingerprints"
 DOMAINS_CONFIG_PATH = BASE_DIR /SYNTHEA_DIR /"synthea_domains.properties"
-VARIANTS_CONFIG_PATH = BASE_DIR / "field_variants.json" 
+VARIANTS_CONFIG_PATH = BASE_DIR / "field_variants.json"
+API_CONFIG_PATH = BASE_DIR / "api_config.json"
 
 TEXT_COLUMNS = ['Id', 'SSN', 'DRIVERS', 'PASSPORT', 'FIRST', 'LAST', 'MIDDLE', 'MAIDEN', 'PREFIX', 'SUFFIX', 'GENDER', 'RACE', 'ETHNICITY', 'MARITAL', 'ENCOUNTERCLASS']
 
-# --- NEW: Function to load field name variants ---
 def load_field_variants(path: Path) -> dict:
     if not path.exists():
         print(f"INFO: Field variants file not found at '{path}'. Using default names.")
@@ -64,7 +66,6 @@ def mock_image_stats(domain: dict) -> dict:
     min_h, max_h = sorted([random.randint(256, 1024), random.randint(1024, 4096)])
     return {"@type": "ex:ImageStatistics", "ex:numImages": random.randint(500, 10000), "ex:imageDimensions": {"ex:minWidth": min_w, "ex:maxWidth": max_w, "ex:minHeight": min_h, "ex:maxHeight": max_h}, "ex:colorMode": random.choice(["Grayscale", "RGB"]), "ex:modality": domain.get("modality", "N/A")}
 
-# --- NEW: Mocking function for Annotation Metadata ---
 def mock_annotation_stats() -> dict:
     classes = sorted({*random.sample(["nodule", "fracture", "tumor", "lesion", "device", "cyst", "mass"], k=random.randint(2, 5))})
     return {
@@ -123,7 +124,6 @@ def load_and_analyze_data(csv_path: Path):
         else:
             if pd.api.types.is_datetime64_any_dtype(series): stats['dataType'] = "sc:Date"
             if not data.empty:
-                # --- MODIFIED: Add category_frequencies and entropy ---
                 value_counts = data.value_counts()
                 probabilities = value_counts / len(data)
                 stat_block = {'unique_count': data.nunique(), 'mode': data.mode().iloc[0], 'mode_frequency': int(value_counts.iloc[0]), 'category_frequencies': {str(k): int(v) for k, v in value_counts.head(10).to_dict().items()}, 'entropy': calculate_entropy(probabilities)}
@@ -170,7 +170,6 @@ def assemble_fingerprint(template: dict, analysis: dict, domain: dict, variants:
     fp['description'] = domain['description']; fp['datePublished'] = today.strftime('%Y-%m-%d')
     fp['version'] = f"1.0.0-synthea-{domain['name']}-{today.strftime('%Y%m%d')}"
     
-    # --- MODIFIED: Add realistic mocked values for datasetStats ---
     ds_stats_fp = fp['ex:datasetStats']
     ds_stats_fp['ex:labelDistribution']['ex:positive'] = analysis['dataset_stats']['positive']
     ds_stats_fp['ex:labelDistribution']['ex:negative'] = analysis['dataset_stats']['negative']
@@ -182,7 +181,6 @@ def assemble_fingerprint(template: dict, analysis: dict, domain: dict, variants:
     for rs_id, rs_analysis in [("patients", analysis['patients']), ("observations", analysis['observations']), ("conditions", analysis['conditions'])]:
         rs_fp = get_record_set_by_id(fp, rs_id); rs_fp['field'] = []
         for original_name, stats in rs_analysis.items():
-            # --- MODIFIED: Randomize field name based on variants config ---
             field_name_variants = variants.get(original_name, [original_name])
             chosen_name = random.choice(field_name_variants)
             
@@ -193,19 +191,20 @@ def assemble_fingerprint(template: dict, analysis: dict, domain: dict, variants:
             
     rs_images = get_record_set_by_id(fp, "medical_images")
     rs_images["ex:imageStats"] = mock_image_stats(domain)
-    # --- NEW: Add mocked annotation stats ---
     rs_images["ex:annotationStats"] = mock_annotation_stats()
     
     print("--- Assembly Finished ---"); return fp
 
 def main():
-    parser = argparse.ArgumentParser(description="Generate realistic, domain-specific Croissant fingerprints using Synthea.")
-    parser.add_argument("-c", "--count", type=int, default=1, help="Total number of mock fingerprints to generate.")
+    parser = argparse.ArgumentParser(description="Generate and optionally upload realistic, domain-specific Croissant fingerprints using Synthea.")
+    parser.add_argument("-c", "--count", type=int, default=1, help="Total number of fingerprints to generate.")
     parser.add_argument("-p", "--population", type=int, default=150, help="Population size for each Synthea run.")
+    parser.add_argument("--send", action="store_true", help="Send generated fingerprints to the API after creating orgs and datasets.")
+    parser.add_argument("--orgs", type=int, default=2, help="Number of new organizations to create if --send is used.")
+    parser.add_argument("--datasets-per-org", type=int, default=3, help="Number of datasets to create per organization if --send is used.")
     args = parser.parse_args()
     
     medical_domains = load_medical_domains_from_config(DOMAINS_CONFIG_PATH)
-    # --- NEW: Load field variants ---
     field_variants = load_field_variants(VARIANTS_CONFIG_PATH)
 
     if not medical_domains: print("No medical domains found in config. Exiting."); sys.exit(1)
@@ -217,22 +216,73 @@ def main():
     
     OUTPUT_DIR.mkdir(exist_ok=True)
     
-    for i in range(args.count):
-        print(f"\n--- Generating Fingerprint {i+1} of {args.count} ---")
-        domain = random.choice(medical_domains)
-        if not run_synthea(args.population, domain['synthea_module']):
-            print(f"!!! Skipping fingerprint {i+1} due to Synthea error. !!!"); continue
-        analysis_results = load_and_analyze_data(CSV_OUTPUT_DIR)
-        if not analysis_results:
-            print(f"!!! Skipping fingerprint {i+1} due to analysis error. !!!"); continue
-        informed_fingerprint = assemble_fingerprint(master_template, analysis_results, domain, field_variants)
-        final_output = {"data": {"type": 0, "version": "1.2", "candidateSearchVisibility": 0, "isAnonymous": True, "rawFingerprintJson": informed_fingerprint}, "requestId": f"synthea-gen-{domain['name']}-{datetime.now().isoformat()}"}
-        output_filename = OUTPUT_DIR / f"synthea_{domain['name']}_{i+1}.json"
-        with open(output_filename, 'w') as f:
-            json.dump(final_output, f, indent=2, cls=NpEncoder)
-        print(f"✅ SUCCESS: Fingerprint {i+1} created at: {output_filename}")
+    if args.send:
+        api_config = api_uploader.load_config(API_CONFIG_PATH)
+        if not api_config: sys.exit(1)
+        
+        token = api_uploader.get_access_token(api_config)
+        if not token: sys.exit(1)
 
-    print(f"\n--- All {args.count} fingerprints generated successfully. ---")
+        print("\n--- STAGE 1: Creating Organizations and Datasets via API ---")
+        org_dataset_map = []
+        for i in range(args.orgs):
+            org_name = f"Synthea-Gen-Org-{i+1}-{random.randint(100, 999)}"
+            print(f"  • ({i+1}/{args.orgs}) Creating Organization: {org_name}")
+            org_id = api_uploader.create_organization_via_api(api_config, token, org_name)
+            if org_id:
+                for j in range(args.datasets_per_org):
+                    domain_for_desc = random.choice(medical_domains)
+                    dataset_name = f"{domain_for_desc['name']} Dataset {j+1}"
+                    dataset_desc = f"A mocked dataset containing synthetic {domain_for_desc['name']} data."
+                    print(f"    • ({j+1}/{args.datasets_per_org}) Creating Dataset: {dataset_name}")
+                    dataset_id = api_uploader.create_dataset_via_api(api_config, token, org_id, dataset_name, dataset_desc)
+                    if dataset_id:
+                        org_dataset_map.append({"org_id": org_id, "dataset_id": dataset_id, "org_name": org_name, "dataset_name": dataset_name})
+        
+        if not org_dataset_map:
+            print("\n✗ No organizations or datasets were created. Aborting fingerprint generation.")
+            sys.exit(1)
+
+        print(f"\n--- STAGE 2: Generating and Posting {args.count} Fingerprints ---")
+        for i in range(args.count):
+            print(f"\n--- Generating & Posting Fingerprint {i+1} of {args.count} ---")
+            domain = random.choice(medical_domains)
+            
+            if not run_synthea(args.population, domain['synthea_module']):
+                print(f"!!! Skipping fingerprint {i+1} due to Synthea error. !!!"); continue
+            
+            analysis_results = load_and_analyze_data(CSV_OUTPUT_DIR)
+            if not analysis_results:
+                print(f"!!! Skipping fingerprint {i+1} due to analysis error. !!!"); continue
+            
+            informed_fingerprint = assemble_fingerprint(master_template, analysis_results, domain, field_variants)
+            final_output = {"data": {"type": 0, "version": "1.2", "candidateSearchVisibility": 0, "isAnonymous": True, "rawFingerprintJson": informed_fingerprint}, "requestId": f"synthea-gen-{domain['name']}-{datetime.now().isoformat()}"}
+            
+            output_filename = OUTPUT_DIR / f"api_sent_{domain['name']}_{i+1}.json"
+            with open(output_filename, 'w') as f: json.dump(final_output, f, indent=2, cls=NpEncoder)
+            print(f"    ✓ Saved local copy: {output_filename}")
+
+            target = random.choice(org_dataset_map)
+            print(f"    → Posting to Org '{target['org_name']}' -> Dataset '{target['dataset_name']}'...")
+            api_uploader.post_fingerprint_via_api(api_config, token, target['org_id'], target['dataset_id'], final_output)
+
+    else:
+        # Local generation workflow
+        for i in range(args.count):
+            print(f"\n--- Generating Fingerprint {i+1} of {args.count} (Local Only) ---")
+            domain = random.choice(medical_domains)
+            if not run_synthea(args.population, domain['synthea_module']):
+                print(f"!!! Skipping fingerprint {i+1} due to Synthea error. !!!"); continue
+            analysis_results = load_and_analyze_data(CSV_OUTPUT_DIR)
+            if not analysis_results:
+                print(f"!!! Skipping fingerprint {i+1} due to analysis error. !!!"); continue
+            informed_fingerprint = assemble_fingerprint(master_template, analysis_results, domain, field_variants)
+            final_output = {"data": {"type": 0, "version": "1.2", "candidateSearchVisibility": 0, "isAnonymous": True, "rawFingerprintJson": informed_fingerprint}, "requestId": f"synthea-gen-{domain['name']}-{datetime.now().isoformat()}"}
+            output_filename = OUTPUT_DIR / f"local_synthea_{domain['name']}_{i+1}.json"
+            with open(output_filename, 'w') as f: json.dump(final_output, f, indent=2, cls=NpEncoder)
+            print(f"✅ SUCCESS: Fingerprint {i+1} created at: {output_filename}")
+
+    print(f"\n--- All operations completed. ---")
 
 if __name__ == "__main__":
     main()
