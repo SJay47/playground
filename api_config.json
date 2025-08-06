@@ -1,0 +1,11 @@
+{
+    "API_BASE_URL": "http://api.primecare.local",
+    "KEYCLOAK_TOKEN_URL": "http://auth.primecare.local:18080/realms/primecare/protocol/openid-connect/token",
+    "KEYCLOAK_CLIENT_ID": "public-dev-ppfl-api-swagger",
+    "ADMIN_USERNAME": "alice@demo.com",
+    "ADMIN_PASSWORD": "q",
+    "API_TIMEOUT": 60,
+    "CREATE_ORGANIZATION_ENDPOINT": "/api/organizations",
+    "CREATE_DATASET_ENDPOINT_TEMPLATE": "/api/organizations/{org_id}/datasets",
+    "CREATE_FINGERPRINT_ENDPOINT_TEMPLATE": "/api/organizations/{org_id}/datasets/{dataset_id}/fingerprints"
+}
